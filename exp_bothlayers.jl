@@ -36,7 +36,7 @@ OUTPUT:
   margins  - minimum margin over samples
   betas    - average squared weight norm
 """
-function twonet(X, Y, m, stepsize, niter)
+function twonet(X, Y, m, stepsize, niter; weight_decay=1e-4)
     (n, d) = size(X)
 
     # initialize weights: rows = neurons, cols = input dims + output weight
@@ -58,22 +58,25 @@ function twonet(X, Y, m, stepsize, niter)
         out  = (1/m) * sum(W[:, end] .* act, dims=1)[:]  # (n)
         perf = Y .* out                                  # margins y_i f(x_i)
 
-        # Exponential loss (mean over samples) -- Option B: no Statistics.mean
-        losses[iter] = sum(exp.(-perf)) / n
+        # Cross-entropy loss (mean over samples)
+        losses[iter] = sum(log.(1 .+ exp.(-perf))) / n
         margins[iter] = minimum(perf)
 
         # Gradient of loss w.r.t. perf
-        gradR = -Y .* exp.(-perf) / n
+        gradR = -Y .* (1 .- 1 ./ (1 .+ exp.(-perf))) / n  # = -Y * sigmoid(-perf) / n
 
         # Gradients
         grad_w1 = (W[:, end] .* float.(act .> 0)) * (X .* gradR)
         grad_w2 = act * gradR
         grad = cat(grad_w1, grad_w2, dims=2)
 
+        # Add L2 regularization (weight decay)
+        grad += weight_decay * W
+
         # Store average squared norm
         betas[iter] = sum(W.^2) / m
 
-        # Gradient descent step (note the minus sign)
+        # Gradient descent step
         W = W - stepsize * grad / sqrt(iter + 1)
     end
 
@@ -96,7 +99,7 @@ end
 Visualizes:
   (1) Neuron trajectories in parameter space
   (2) Decision boundary in input space
-  (3) Decreasing training loss curve
+  (3) Training loss curve
 """
 function illustration(k, n, m, stepsize, niter, nframes, resolution)
     # --- data generation ---
@@ -117,7 +120,7 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
     X2 = X[Y .== -1, :]
 
     # --- training ---
-    Ws, losses, margins, betas = twonet(X, Y, m, stepsize, niter)
+    Ws, losses, margins, betas = twonet(X, Y, m, stepsize, niter; weight_decay=1e-4)
 
     # time sampling for visualization
     a  = (niter - 1) / (nframes - 1)^4
@@ -163,16 +166,16 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
         axis("equal"); axis("off")
         ax2.set_title("Decision boundary")
 
-        # (3) true training loss (decreasing)
+        # (3) true training loss
         ax3 = subplot(133)
         ax3.plot(1:niter, losses, "C2", linewidth=1.5)
         ax3.axvline(ts[kf], color="k", linestyle="--", linewidth=1)
         ax3.set_xlabel("Iteration")
-        ax3.set_ylabel("Exponential loss")
-        ax3.set_title("Training loss (decreasing)")
+        ax3.set_ylabel("Cross Entropy Loss")
+        ax3.set_title("Training loss")
         ax3.grid(true)
 
-        savefig("dynamics_$(kf).png", bbox_inches="tight", dpi=300)
+        savefig("dynamics_wd_$(kf).png", bbox_inches="tight", dpi=300)
         close(fig)
     end
 end
