@@ -10,13 +10,15 @@
 # illustration(4, 60, 200, 0.4, 100000, 10, 0.05);
 # These parameters are explained in the header of the function "illustration"
 # A good illustration is obtained as follows (takes 20 min):
-# Random.seed!(9); # 9 generates a nice random problem
 # illustration(4, 60, 400, 0.4, 1000000, 400, 0.005);
 
 
 using LinearAlgebra, Random
 using PyPlot, ProgressMeter
 using3D()
+
+const SEED = 0
+const RNG  = MersenneTwister(SEED)
 
 """
 Gradient descent to train a 2-layer ReLU neural network for the exponential loss.
@@ -137,10 +139,12 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
     # --- plotting loop ---
     @showprogress 1 "Plotting images..." for kf = 1:length(ts)
         ioff()
-        fig = figure(figsize = [10, 4])
+        fig = figure(figsize = [16, 4])
+        # define a 1×3 grid with custom relative widths (make loss plot wider)
+        gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 1.6], wspace=0.25)
 
         # (1) neuron dynamics
-        ax1 = subplot(131, projection="3d")
+        ax1 = fig.add_subplot(gs[1], projection="3d")
         if kf < 11
             indt = 1:kf
         else
@@ -155,7 +159,7 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
         ax1.set_title("Neuron trajectories")
 
         # (2) decision boundary
-        ax2 = subplot(132)
+        ax2 = fig.add_subplot(gs[2])
         f(x1,x2,kk) = (1/m) * sum(Ws[:,end,kk] .* max.(Ws[:,1:3,kk]*[1;x1;x2],0.0))
         xs = -0.8:resolution:0.8
         tab = [f(xs[i],xs[j],kf) for i=1:length(xs), j=1:length(xs)]
@@ -167,7 +171,7 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
         ax2.set_title("Decision boundary")
 
         # (3) true training loss
-        ax3 = subplot(133)
+        ax3 = fig.add_subplot(gs[3])
         ax3.plot(1:niter, losses, "C2", linewidth=1.5)
         ax3.axvline(ts[kf], color="k", linestyle="--", linewidth=1)
         ax3.set_xlabel("Iteration")
