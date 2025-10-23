@@ -124,9 +124,12 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
                 dims = 2)
     Yfull = A[P]
 
-    # 80/20 split (held-out test set)
+    # 80/20 split (held-out test set) - for typical experiments (runs up to 7)
+    # 20/80 split for grokking settings - for runs 7,8
+    # 40/60 split for runs 9
+
     idx = randperm(n)
-    ntr = Int(floor(0.8n))
+    ntr = Int(floor(0.4n))
     tr_idx, te_idx = idx[1:ntr], idx[ntr+1:end]
     Xtr, Ytr = Xfull[tr_idx, :], Yfull[tr_idx]
     Xte, Yte = Xfull[te_idx, :], Yfull[te_idx]
@@ -137,7 +140,7 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
 
     # --- training ---
     Ws, train_losses, margins, betas, train_accs, test_losses, test_accs =
-        twonet(Xtr, Ytr, m, stepsize, niter; weight_decay=1e-4, Xte=Xte, Yte=Yte)
+        twonet(Xtr, Ytr, m, stepsize, niter; weight_decay=1e-3, Xte=Xte, Yte=Yte)
 
     # time sampling for visualization
     a  = (niter - 1) / (nframes - 1)^4
@@ -191,7 +194,7 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
         ax3.set_ylabel("Cross Entropy Loss")
         ax3.set_title("Loss (train vs test)")
         ax3.grid(true)
-        ax3.legend(frameon=false)
+        ax3.legend(loc="upper right", frameon=false)
 
         # (4) train vs test accuracy (bottom-right)
         ax4 = fig.add_subplot(gs[2, 2])
@@ -203,7 +206,7 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
         ax4.set_ylim(0, 1.0)
         ax4.set_title("Accuracy (train vs test)")
         ax4.grid(true)
-        ax4.legend(frameon=false)
+        ax4.legend(loc="upper right", frameon=false)
 
         savefig("dynamics_wd_$(kf).png", bbox_inches="tight", dpi=300)
         close(fig)
