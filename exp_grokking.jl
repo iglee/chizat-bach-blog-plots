@@ -1,5 +1,6 @@
 using LinearAlgebra, Random
 using PyPlot, ProgressMeter
+using Statistics        # not strictly needed now, but fine to keep
 using3D()
 
 const SEED = 0
@@ -54,7 +55,7 @@ function twonet(Xtr, Ytr, m, stepsize, niter; weight_decay=1e-4, Xte=nothing, Yt
         Ws[:, :, iter] = W
 
         # ---------- forward (train) ----------
-        act_tr  = max.(W[:, 1:end-1] * Xtr', 0.0)                   # (m × ntr), OK: (m×d)*(d×ntr)
+        act_tr  = max.(W[:, 1:end-1] * Xtr', 0.0)                   # (m × ntr)
         out_tr  = (1/m) * sum(W[:, end] .* act_tr, dims=1)[:]       # (ntr)
         perf_tr = Ytr .* out_tr
 
@@ -102,12 +103,14 @@ end
 
 """
 Visualizes:
-  (1) Neuron trajectories in parameter space
-  (2) Decision boundary in input space
-  (3) Train vs Test loss (bottom-left)
-  (4) Train vs Test accuracy (bottom-right)
+  (1) Neuron trajectories in parameter space (data-agnostic)
+  (2) Neuron activation trajectories on TRAIN: μ_i(t) = mean_x ReLU(w_i(t)·x) x
+  (3) Neuron activation trajectories on TEST:  μ_i(t) = mean_x ReLU(w_i(t)·x) x
+  (4) Decision boundary in input space
+  (5) Train vs Test loss (bottom-middle)
+  (6) Train vs Test accuracy (bottom-right)
 
-NOTE: We generate `n` total samples and do an 80/20 train/test split.
+NOTE: We generate `n` total samples and do a 40/60 train/test split.
 """
 function illustration(k, n, m, stepsize, niter, nframes, resolution)
     # --- data generation ---
@@ -124,10 +127,7 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
                 dims = 2)
     Yfull = A[P]
 
-    # 80/20 split (held-out test set) - for typical experiments (runs up to 7)
-    # 20/80 split for grokking settings - for runs 7,8
-    # 40/60 split for runs 9
-
+    # 40/60 split
     idx = randperm(n)
     ntr = Int(floor(0.4n))
     tr_idx, te_idx = idx[1:ntr], idx[ntr+1:end]
@@ -146,35 +146,86 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
     a  = (niter - 1) / (nframes - 1)^4
     ts = unique(Int.(floor.(a .* (0:nframes-1).^4)) .+ 1)
     ts = ts[ts .>= 1 .&& ts .<= niter]
-    Ws = Ws[:, :, ts]
+    Ws = Ws[:, :, ts]  # keep only sampled checkpoints
+    Tframes = length(ts)
 
-    # projection of hidden neurons
-    Wproj = Ws[:, 1:end-1, :] .* abs.(Ws[:, end:end, :])
-    WN    = sqrt.(sum(Wproj.^2, dims=2))
-    Wdir  = Wproj ./ WN
-    Wlog  = tanh.(0.5 .* WN) .* Wdir
+    # === (A) parameter-space (data-agnostic) projection ===
+    Wproj_param = Ws[:, 1:end-1, :] .* abs.(Ws[:, end:end, :])       # (m × d × T)
+    WN_param    = sqrt.(sum(Wproj_param.^2, dims=2))                 # (m × 1 × T)
+    Wdir_param  = Wproj_param ./ WN_param
+    Wlog_param  = tanh.(0.5 .* WN_param) .* Wdir_param               # (m × d × T)
 
-    # --- plotting loop ---
-    @showprogress 1 "Plotting images..." for kf = 1:length(ts)
-        ioff()
-        fig = figure(figsize = [14, 8])
-
-        # 2×2 grid: top row (trajectories, boundary), bottom row (loss, accuracy)
-        gs = fig.add_gridspec(2, 2, height_ratios=[1.2, 0.9], wspace=0.3, hspace=0.35)
-
-        # (1) neuron dynamics (top-left)
-        ax1 = fig.add_subplot(gs[1, 1], projection="3d")
-        indt = kf < 11 ? (1:kf) : ((kf-10):kf)
-        for i = 1:size(Wlog, 1)
-            plot3D(Wlog[i,2,indt], Wlog[i,3,indt], Wlog[i,1,indt], color="k", linewidth=0.2)
+    # === (B) activation-space projection for a dataset X ===
+    # μ_i(t) = (1/n) Σ_x ReLU(w_i(t)·x) x   (x includes bias coordinate 1)
+    function activation_log(Ws_snapshots, X)
+        m, d1, T = size(Ws_snapshots)    # d1 = d_in + 1 (incl. output)
+        d = d1 - 1                       # bias + 2 inputs
+        WlogX = zeros(m, d, T)
+        nX = size(X, 1)
+        for t = 1:T
+            Wt   = Ws_snapshots[:, :, t]           # (m × (d+1))
+            pre  = Wt[:, 1:end-1] * X'             # (m × nX)
+            act  = max.(pre, 0.0)                  # ReLU
+            M    = (act * X) ./ nX                 # (m × d): activation-weighted input mean
+            # --- rescale for better visualization ---
+            r    = sqrt.(sum(M.^2, dims=2))        # (m × 1)
+            dir  = M ./ (r .+ 1e-8)
+            gain = 5.0                             # try 3–5 for more spread
+            WlogX[:, :, t] = tanh.(gain .* r) .* dir
         end
-        plot3D(Wlog[1:div(m,2),2,kf],Wlog[1:div(m,2),3,kf],Wlog[1:div(m,2),1,kf],"o",color="C3",markersize=1)
-        plot3D(Wlog[div(m,2)+1:end,2,kf],Wlog[div(m,2)+1:end,3,kf],Wlog[div(m,2)+1:end,1,kf],"o",color="C0",markersize=1)
-        ax1.set_xlim3d(-1,1); ax1.set_ylim3d(-1,1); ax1.set_zlim3d(-1,1)
-        ax1.set_title("Neuron trajectories")
+        return WlogX
+    end
 
-        # (2) decision boundary (top-right)
-        ax2 = fig.add_subplot(gs[1, 2])
+
+
+    # Compute activation trajectories for TRAIN and TEST
+    Wlog_act_tr = activation_log(Ws, Xtr)   # (m × 3 × T)
+    Wlog_act_te = activation_log(Ws, Xte)
+
+    # --- plotting loop (2×3 layout) ---
+    @showprogress 1 "Plotting images..." for kf = 1:Tframes
+        ioff()
+        fig = figure(figsize = [18, 8])
+
+        # Top row:  Param | Train activations | Test activations
+        # Bottom:   Boundary | Loss | Accuracy
+        gs = fig.add_gridspec(2, 3, height_ratios=[1.2, 0.9], wspace=0.35, hspace=0.35)
+
+        # draw a short window of recent steps for each path
+        indt = kf < 11 ? (1:kf) : ((kf-10):kf)
+
+        # (1) PARAM (data-agnostic)
+        axP = fig.add_subplot(gs[1, 1], projection="3d")
+        for i = 1:size(Wlog_param, 1)
+            plot3D(Wlog_param[i,2,indt], Wlog_param[i,3,indt], Wlog_param[i,1,indt], color="k", linewidth=0.2)
+        end
+        plot3D(Wlog_param[1:div(m,2),2,kf], Wlog_param[1:div(m,2),3,kf], Wlog_param[1:div(m,2),1,kf], "o", color="C3", markersize=1)
+        plot3D(Wlog_param[div(m,2)+1:end,2,kf], Wlog_param[div(m,2)+1:end,3,kf], Wlog_param[div(m,2)+1:end,1,kf], "o", color="C0", markersize=1)
+        axP.set_xlim3d(-1,1); axP.set_ylim3d(-1,1); axP.set_zlim3d(-1,1)
+        axP.set_title("Neuron trajectories (parameter)")
+
+        # (2) TRAIN activations
+        axT = fig.add_subplot(gs[1, 2], projection="3d")
+        for i = 1:size(Wlog_act_tr, 1)
+            plot3D(Wlog_act_tr[i,2,indt], Wlog_act_tr[i,3,indt], Wlog_act_tr[i,1,indt], color="k", linewidth=0.2)
+        end
+        plot3D(Wlog_act_tr[1:div(m,2),2,kf], Wlog_act_tr[1:div(m,2),3,kf], Wlog_act_tr[1:div(m,2),1,kf], "o", color="C3", markersize=1)
+        plot3D(Wlog_act_tr[div(m,2)+1:end,2,kf], Wlog_act_tr[div(m,2)+1:end,3,kf], Wlog_act_tr[div(m,2)+1:end,1,kf], "o", color="C0", markersize=1)
+        axT.set_xlim3d(-1,1); axT.set_ylim3d(-1,1); axT.set_zlim3d(-1,1)
+        axT.set_title("Neuron activation trajectories (train)")
+
+        # (3) TEST activations
+        axE = fig.add_subplot(gs[1, 3], projection="3d")
+        for i = 1:size(Wlog_act_te, 1)
+            plot3D(Wlog_act_te[i,2,indt], Wlog_act_te[i,3,indt], Wlog_act_te[i,1,indt], color="k", linewidth=0.2)
+        end
+        plot3D(Wlog_act_te[1:div(m,2),2,kf], Wlog_act_te[1:div(m,2),3,kf], Wlog_act_te[1:div(m,2),1,kf], "o", color="C3", markersize=1)
+        plot3D(Wlog_act_te[div(m,2)+1:end,2,kf], Wlog_act_te[div(m,2)+1:end,3,kf], Wlog_act_te[div(m,2)+1:end,1,kf], "o", color="C0", markersize=1)
+        axE.set_xlim3d(-1,1); axE.set_ylim3d(-1,1); axE.set_zlim3d(-1,1)
+        axE.set_title("Neuron activation trajectories (test)")
+
+        # (4) Decision boundary
+        axB = fig.add_subplot(gs[2, 1])
         f(x1,x2,kk) = (1/m) * sum(Ws[:,end,kk] .* max.(Ws[:,1:3,kk]*[1;x1;x2],0.0))
         xs = -0.8:resolution:0.8
         tab = [f(xs[i],xs[j],kf) for i=1:length(xs), j=1:length(xs)]
@@ -183,30 +234,25 @@ function illustration(k, n, m, stepsize, niter, nframes, resolution)
         contour(xs', xs, tanh.(tab'), levels=0, colors="k", linewidths=2)
         plot(X1[:,2],X1[:,3],"+k"); plot(X2[:,2],X2[:,3],"_k")
         axis("equal"); axis("off")
-        ax2.set_title("Decision boundary")
+        axB.set_title("Decision boundary")
 
-        # (3) train vs test loss (bottom-left)
-        ax3 = fig.add_subplot(gs[2, 1])
-        ax3.plot(1:length(train_losses), train_losses, "C2", linewidth=1.5, label="Train")
-        ax3.plot(1:length(test_losses),  test_losses,  "C4", linewidth=1.2, linestyle="--", label="Test")
-        ax3.axvline(ts[kf], color="k", linestyle=":", linewidth=1)
-        ax3.set_xlabel("Iteration")
-        ax3.set_ylabel("Cross Entropy Loss")
-        ax3.set_title("Loss (train vs test)")
-        ax3.grid(true)
-        ax3.legend(loc="upper right", frameon=false)
+        # (5) Loss
+        axL = fig.add_subplot(gs[2, 2])
+        axL.plot(1:length(train_losses), train_losses, "C2", linewidth=1.5, label="Train")
+        axL.plot(1:length(test_losses),  test_losses,  "C4", linewidth=1.2, linestyle="--", label="Test")
+        axL.axvline(ts[kf], color="k", linestyle=":", linewidth=1)
+        axL.set_xlabel("Iteration"); axL.set_ylabel("Cross Entropy Loss")
+        axL.set_title("Loss (train vs test)")
+        axL.grid(true); axL.legend(loc="upper right", frameon=false)
 
-        # (4) train vs test accuracy (bottom-right)
-        ax4 = fig.add_subplot(gs[2, 2])
-        ax4.plot(1:length(train_accs), train_accs, "C1", linewidth=1.5, label="Train")
-        ax4.plot(1:length(test_accs),  test_accs,  "C0", linewidth=1.2, linestyle="--", label="Test")
-        ax4.axvline(ts[kf], color="k", linestyle=":", linewidth=1)
-        ax4.set_xlabel("Iteration")
-        ax4.set_ylabel("Accuracy")
-        ax4.set_ylim(0, 1.0)
-        ax4.set_title("Accuracy (train vs test)")
-        ax4.grid(true)
-        ax4.legend(loc="upper right", frameon=false)
+        # (6) Accuracy
+        axA = fig.add_subplot(gs[2, 3])
+        axA.plot(1:length(train_accs), train_accs, "C1", linewidth=1.5, label="Train")
+        axA.plot(1:length(test_accs),  test_accs,  "C0", linewidth=1.2, linestyle="--", label="Test")
+        axA.axvline(ts[kf], color="k", linestyle=":", linewidth=1)
+        axA.set_xlabel("Iteration"); axA.set_ylabel("Accuracy"); axA.set_ylim(0, 1.0)
+        axA.set_title("Accuracy (train vs test)")
+        axA.grid(true); axA.legend(loc="upper right", frameon=false)
 
         savefig("dynamics_wd_$(kf).png", bbox_inches="tight", dpi=300)
         close(fig)
